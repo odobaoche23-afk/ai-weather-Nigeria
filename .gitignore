@@ -1,5 +1,3 @@
-__pycache__/ 
-*.pyc 
-Data/Weather_Data/ 
-Models/Saved_Models/ 
-*.pkl 
+__pycache__/
+*.pyc
+Data/Weather_Data/
