@@ -21,27 +21,61 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-        :root {
-            --navy: #16324F;
-            --blue: #245B82;
-            --teal: #168C8C;
-            --ink: #243447;
-            --muted: #526477;
-            --line: #DCE4EC;
-            --surface: #FFFFFF;
-            --page: #F5F8FC;
-        }
+   :root {
+    --navy: #1D3557;
+    --blue: #3A6EA5;
+    --teal: #168C8C;
+    --ink: #263445;
+    --muted: #46576A;
+    --line: #DCE5EF;
+    --surface: #FFFFFF;
+    --page: #F8FAFD;
+}
 
-        /* Force Times New Roman across the whole app */
-        html, body, [class*="css"], .stApp, .stMarkdown, p, h1, h2, h3, h4, h5, h6,
-        label, span, div, button, input, select, textarea {
-            font-family: "Times New Roman", Times, serif !important;
-        }
+       /* Apply Times New Roman to app text without overriding Streamlit icons */
+html,
+body,
+.stApp,
+.stMarkdown,
+p,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+label,
+input,
+select,
+textarea {
+    font-family: "Times New Roman", Times, serif !important;
+}
+
+/* Preserve Streamlit's native expander arrow and icon fonts */
+[data-testid="stExpander"] summary,
+[data-testid="stExpander"] summary p {
+    font-family: "Times New Roman", Times, serif !important;
+}
+
+[data-testid="stExpander"] summary svg {
+    font-family: inherit;
+}        }
 
         .stApp {
-            background: var(--page);
-            color: var(--ink);
-        }
+    background: #F8FAFD !important;
+    color: #263445 !important;
+}
+
+[data-testid="stMain"],
+[data-testid="stMainBlockContainer"] {
+    background: #F8FAFD !important;
+}
+
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stCaptionContainer"] {
+    color: #34465A !important;
+}
         [data-testid="stHeader"] {
             background: rgba(245, 248, 252, 0.96);
         }
@@ -466,48 +500,97 @@ if results:
     c4.metric("💨 Wind speed", f"{current_wind:.2f} m/s")
     c5.metric("☀️ Solar radiation", f"{current_solar:.2f}")
 
+    
+    
     # Prepare forecast data
     rows = []
+
     for horizon, forecast in sorted(results.items()):
         raw_rainfall = float(forecast["prediction"]["rainfall"])
         temperature = float(forecast["prediction"]["temperature"])
         rainfall = max(raw_rainfall, 0.0)
+
+        # Wind speed and solar radiation from Open-Meteo
+        external = forecast.get("external_forecast", {})
+        wind_speed = external.get("wind_speed")
+        solar_radiation = external.get("solar_radiation")
+
         rows.append({
             "Horizon": f"{horizon} days",
             "Days ahead": horizon,
             "Date": forecast["forecast_date"],
             "Rainfall (mm)": rainfall,
             "Temperature (°C)": temperature,
+            "Wind speed (m/s)": wind_speed,
+            "Solar radiation (kWh/m²/day)": solar_radiation,
         })
+
     fc = pd.DataFrame(rows)
 
-    # AI forecast cards
-    section_heading(
-        "AI-generated forecast",
-        "Compare predicted rainfall and temperature across the available forecast horizons.",
-    )
-
+    
+        # Clean, compact forecast layout
     forecast_columns = st.columns(len(fc))
+
     for column, (_, row) in zip(forecast_columns, fc.iterrows()):
         rainfall = float(row["Rainfall (mm)"])
         temperature = float(row["Temperature (°C)"])
+        wind_speed = row["Wind speed (m/s)"]
+        solar_radiation = row["Solar radiation (kWh/m²/day)"]
         symbol = weather_icon(rainfall, temperature)
+
         with column:
             st.markdown(
                 f"""
-                <div class="panel">
-                    <div class="weather-symbol">{symbol}</div>
-                    <div class="panel-title">{row["Horizon"]}</div>
-                    <p class="panel-copy">{row["Date"]}</p>
+                <div style="
+                    padding: 8px 0 12px 0;
+                    border-bottom: 2px solid #DCE5EF;
+                    margin-bottom: 12px;
+                ">
+                    <div style="font-size: 1.8rem; margin-bottom: 4px;">
+                        {symbol}
+                    </div>
+                    <div style="
+                        color: #1D3557;
+                        font-size: 1.15rem;
+                        font-weight: 700;
+                    ">
+                        {row["Horizon"]}
+                    </div>
+                    <div style="color: #526477; font-size: 0.88rem;">
+                        {row["Date"]}
+                    </div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-            st.metric("🌧️ Predicted rainfall", f"{rainfall:.1f} mm")
+
+            st.markdown("**Rainfall**")
+            st.markdown(
+                f"<div style='font-size:1.65rem; font-weight:700; color:#168C8C;'>{rainfall:.1f} mm</div>",
+                unsafe_allow_html=True,
+            )
             st.caption(rain_label(rainfall))
-            st.metric("🌡️ Predicted temperature", f"{temperature:.1f} °C")
+
+            st.markdown("**Maximum temperature**")
+            st.markdown(
+                f"<div style='font-size:1.65rem; font-weight:700; color:#245B82;'>{temperature:.1f} °C</div>",
+                unsafe_allow_html=True,
+            )
             st.caption(temp_label(temperature))
 
+            wind_text = (
+                f"{float(wind_speed):.2f} m/s"
+                if pd.notna(wind_speed)
+                else "Unavailable"
+            )
+            solar_text = (
+                f"{float(solar_radiation):.2f} kWh/m²/day"
+                if pd.notna(solar_radiation)
+                else "Unavailable"
+            )
+
+            st.caption(f"Wind speed: **{wind_text}**")
+            st.caption(f"Solar radiation: **{solar_text}**")
     # Charts
     section_heading("📊 Forecast charts")
     left, right = st.columns(2)
@@ -615,12 +698,7 @@ if results:
             st.write("- Water young trees as needed and check soil moisture.")
             st.write("- Time planting to local rainfall patterns and seedling requirements.")
 
-    with st.expander("🔎 Technical forecast table"):
-        st.dataframe(
-            fc[["Horizon", "Date", "Rainfall (mm)", "Temperature (°C)"]],
-            use_container_width=True,
-            hide_index=True,
-        )
+    
 
 elif errors:
     st.error("A forecast could not be generated. Open the technical details below to inspect the error.")

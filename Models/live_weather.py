@@ -1,11 +1,12 @@
-import requests
 
-# ----------------------------------------
-# Coordinates of Nigerian State Capitals
-# ----------------------------------------
+import requests
+import pandas as pd
+from datetime import datetime
+
+API_URL = "https://api.open-meteo.com/v1/forecast"
+
 
 STATE_COORDINATES = {
-
     "Abia": (5.5320, 7.4860),
     "Adamawa": (9.2035, 12.4954),
     "Akwa Ibom": (5.0377, 7.9128),
@@ -20,6 +21,7 @@ STATE_COORDINATES = {
     "Edo": (6.3382, 5.6258),
     "Ekiti": (7.6233, 5.2209),
     "Enugu": (6.4402, 7.4943),
+    "FCT": (9.0765, 7.3986),
     "Federal Capital Territory": (9.0765, 7.3986),
     "Gombe": (10.2897, 11.1673),
     "Imo": (5.4850, 7.0350),
@@ -43,55 +45,183 @@ STATE_COORDINATES = {
     "Taraba": (8.8937, 11.3596),
     "Yobe": (11.7486, 11.9669),
     "Zamfara": (12.1704, 6.6641)
-
 }
-# ----------------------------------------
-# Get Live Weather
-# ----------------------------------------
 
-def get_live_weather(state):
 
+def get_coordinates(state):
+    """Return the coordinates for a Nigerian state."""
     if state not in STATE_COORDINATES:
         raise ValueError(f"Unknown state: {state}")
 
-    latitude, longitude = STATE_COORDINATES[state]
+    return STATE_COORDINATES[state]
 
-    url = (
-        "https://api.open-meteo.com/v1/forecast"
-        f"?latitude={latitude}"
-        f"&longitude={longitude}"
-        "&current="
-        "temperature_2m,"
-        "relative_humidity_2m,"
-        "wind_speed_10m,"
-        "precipitation,"
-        "shortwave_radiation"
-    )
 
-    response = requests.get(url, timeout=30)
+def get_live_weather(state):
+    """Retrieve current weather conditions for a state."""
+    latitude, longitude = get_coordinates(state)
+
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "current": (
+            "temperature_2m,"
+            "relative_humidity_2m,"
+            "wind_speed_10m,"
+            "precipitation,"
+            "shortwave_radiation"
+        ),
+        "temperature_unit": "celsius",
+        "wind_speed_unit": "ms",
+        "precipitation_unit": "mm",
+        "timezone": "Africa/Lagos"
+    }
+
+    response = requests.get(API_URL, params=params, timeout=30)
     response.raise_for_status()
 
-    data = response.json()["current"]
+    current = response.json().get("current")
+
+    if not current:
+        raise ValueError("The weather API returned no current weather data.")
 
     return {
         "State": state,
-        "Temperature": float(data["temperature_2m"]),
-        "Humidity": float(data["relative_humidity_2m"]),
-        "WindSpeed": float(data["wind_speed_10m"]),
-        "Rainfall": float(data["precipitation"]),
-        "SolarRadiation": float(data["shortwave_radiation"])
+        "Temperature": current["temperature_2m"],
+        "Humidity": current["relative_humidity_2m"],
+        "WindSpeed": current["wind_speed_10m"],
+        "Rainfall": current["precipitation"],
+        "SolarRadiation": current["shortwave_radiation"]
     }
 
 
-# ----------------------------------------
-# Test
-# ----------------------------------------
+def get_recent_daily_weather(state):
+    """
+    Retrieve recent daily weather observations and the current day's
+    forecast where available.
+
+    Rainfall: mm/day
+    Temperature: degrees Celsius
+    Humidity: percent
+    Wind speed: m/s at 10 metres
+    Solar radiation: kWh/m²/day
+    """
+    latitude, longitude = get_coordinates(state)
+
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "daily": (
+            "precipitation_sum,"
+            "temperature_2m_max,"
+            "temperature_2m_min,"
+            "relative_humidity_2m_mean,"
+            "wind_speed_10m_mean,"
+            "shortwave_radiation_sum"
+        ),
+        "past_days": 7,
+        "forecast_days": 1,
+        "temperature_unit": "celsius",
+        "wind_speed_unit": "ms",
+        "precipitation_unit": "mm",
+        "timezone": "Africa/Lagos"
+    }
+
+    response = requests.get(API_URL, params=params, timeout=30)
+    response.raise_for_status()
+
+    payload = response.json()
+
+    if "daily" not in payload:
+        raise ValueError("The weather API did not return daily data.")
+
+    daily_data = payload["daily"]
+
+    # Open-Meteo reports daily shortwave radiation in MJ/m².
+    # Convert to kWh/m² to match the usual NASA POWER unit.
+    solar_values = daily_data["shortwave_radiation_sum"]
+
+    daily = pd.DataFrame({
+        "Date": daily_data["time"],
+        "Rainfall": daily_data["precipitation_sum"],
+        "MaxTemp": daily_data["temperature_2m_max"],
+        "MinTemp": daily_data["temperature_2m_min"],
+        "Humidity": daily_data["relative_humidity_2m_mean"],
+        "WindSpeed": daily_data["wind_speed_10m_mean"],
+        "SolarRadiation": [
+            value / 3.6 if value is not None else None
+            for value in solar_values
+        ]
+    })
+
+    daily["Date"] = pd.to_datetime(daily["Date"])
+
+    numeric_columns = [
+        "Rainfall",
+        "MaxTemp",
+        "MinTemp",
+        "Humidity",
+        "WindSpeed",
+        "SolarRadiation"
+    ]
+
+    daily[numeric_columns] = daily[numeric_columns].apply(
+        pd.to_numeric, errors="coerce"
+    )
+
+    daily = daily.dropna(subset=numeric_columns).reset_index(drop=True)
+    daily["State"] = state
+
+    if daily.empty:
+        raise ValueError("No usable daily weather records were returned.")
+
+    return daily
+
 
 if __name__ == "__main__":
+    print("Current weather:")
+    print(get_live_weather("Kaduna"))
 
-    weather = get_live_weather("Kaduna")
+    print("\nRecent daily weather:")
+    print(get_recent_daily_weather("Kaduna").to_string(index=False))
 
-    print("\nCurrent Live Weather\n")
+def get_daily_forecast(state, forecast_date):
+    """Get external wind speed and solar radiation for a forecast date."""
 
-    for key, value in weather.items():
-        print(f"{key}: {value}")
+    latitude, longitude = get_coordinates(state)
+
+    if isinstance(forecast_date, (datetime, pd.Timestamp)):
+        forecast_date = forecast_date.strftime("%Y-%m-%d")
+
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "daily": "wind_speed_10m_mean,shortwave_radiation_sum",
+        "start_date": forecast_date,
+        "end_date": forecast_date,
+        "wind_speed_unit": "ms",
+        "timezone": "Africa/Lagos"
+    }
+
+    response = requests.get(API_URL, params=params, timeout=30)
+    response.raise_for_status()
+
+    daily = response.json().get("daily")
+
+    if not daily or not daily.get("time"):
+        raise ValueError(
+            f"No external weather forecast returned for {forecast_date}."
+        )
+
+    wind_speed = daily["wind_speed_10m_mean"][0]
+    solar_mj = daily["shortwave_radiation_sum"][0]
+
+    return {
+        "wind_speed": (
+            round(float(wind_speed), 2)
+            if wind_speed is not None else None
+        ),
+        "solar_radiation": (
+            round(float(solar_mj) / 3.6, 2)
+            if solar_mj is not None else None
+        )
+    }
